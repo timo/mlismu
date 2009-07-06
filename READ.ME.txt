@@ -1,0 +1,148 @@
+INTRODUCTION
+============
+
+mlismu is a random Lojban text generator.  It generates grammatically
+correct, semantically *nearly* correct text, that is nonsensical only in
+particular ways.  Consider the sentences:
+
+ E1: The camel swam in the glass of milk.
+ E2: The glass of milk swam in the camel.
+
+Sentence E1 is bizarre, and impossible due to practical considerations (unless
+we're dealing with either a very small camel or a very large glass of milk).
+But sentence E2 is completely wrong, for ontological reasons: a glass of milk
+is a body of liquid, so something could swim in it.  But a glass of milk
+simply isn't the sort of thing that swims.  The goal of mlismu is to create
+sentences of the first sort, where all the types fit together into an almost
+coherent whole.  To do this, it stores information about what types of sumti
+can fill what places of what gismu, in a file named "fatci.txt".  The fatci
+database is stored in plain Lojban, with a few conventions (which will be
+detailed later).  
+
+I'll explain through an example.  Pretend that fatci contains the facts
+
+ F1: ro kumte cu danlu
+ F2: ro danlu cu ka'e limna
+ F3: ro da litki gi'o ka'e se limna
+ F4: ro ladru cu litki
+
+We'll randomly choose a main selbri, in this case {limna}, and attempt to
+fill its sumti places.  Having no information about the x3-x5, we omit them
+entirely.  For the x1, we find everything that can apply.  This turns out to
+be all animals (from F2), and since all camels are animals (from F1), they
+apply too.  So the list of things that can swim are {kumte} and {danlu}.
+Arbitrarily, we choose {kumte}.  Similarly, for the x2 of {limna} we find
+that all liquids apply, and that milk is a liquid.  So we choose that.  So we
+end up with the output
+
+ L1: le kumte cu limna le ladru
+
+Note that we could also have produced the much more generic
+
+ L2: le danlu cu limna le litki
+
+It's just random.
+
+FATCI
+=====
+As mentioned earlier, fatci.txt is a database of "facts" in Lojban.  It's
+written to be easy to parse, which means we don't allow all legal Lojban, and
+unfortunately we probably allow some that is illegal.  Every line is
+processed separately, and anything after a # is considered a comment and
+ignored.  bridi aren't allowed to run on for more than one line, so the
+initial {.i} is optional in all cases.
+
+Lines in fatci.txt are of one of four types: cmene, subset, equivalent set,
+and absolute quantification.
+
+cmene lines create named sumti.  They follow the form {la [name] cu
+[selbri]}, for instance
+
+ F5: .i la timos cu nanla
+ F6: .i la turgul cu prenu
+ F7: la lojban cu bangu
+ F8: la kok cu se sodva
+ F9: la norsmu cu prenu
+
+Note that the {cu} is mandatory.  This is because the parsing sucks, and
+doesn't know how else to handle things.  Sorry.  
+
+In English, names are usually applied only to certain classes of things,
+particularly people, pets, owned animals, languages, and sometimes vehicles
+and other assorted things.  In Lojban, of course, there's no restriction at
+all, so any sumti can be named.
+
+What I'm calling "subset" lines are things like
+
+ F10: .i ro mabru cu danlu
+ F11: .i ro jbari cu grute
+ F12: ro prenu cu ka'e se cusku
+
+Where we say that the set of mammals is a subset of the set of animals (in
+this case a proper subset), the set of berries is a subset of the set of
+fruit, and the set of people is a subset of the set of things that can speak.
+The {ka'e} is ignored completely by mlismu; it's there because it's sometimes
+useful to draw a distinction.  In general, it's probably best to read
+everything in mlismu as if it has an implicit {ka'e}.  It's the types that
+match, not necessarily the individuals.
+
+The "equivalent set" lines are of the form {ro da broda gi'o brode} (or {ro
+da zo'u da broda gi'o brode}).  For example:
+
+ F13: ro da bersa gi'o nanmu
+ F14: ro da zo'u da mabru gi'o se kerfa
+ F15: .i ro da stuzi gi'o se klama
+
+F13 is equivalent to asserting separately {ro bersa cu nanmu} and {ro nanmu
+cu bersa}.  Since both are (non-proper, in this case) subsets of each other,
+they're just the same set.  
+
+The absolute quantifications are lines like
+
+ F16: ro da ka'e melbi
+ F17: ro da ka'e te djuno
+
+and so on, asserting that any possible sumti, be it real, abstract, or
+whatever, can fill the role.  
+
+Additionally, I've had to improvise some vocabulary, and some sumti types are
+hardcoded in mlismu.  {fatci} is used for {du'u}-type abstractions.  So if we
+assert that 
+
+ F18: ro da fatci gi'o ka'e se xusra
+
+we mean that the x2 of {xusra} can be filled not just with anything else
+equivalent to {fatci}, but also with any {du'u} abstraction.  That is, I'm
+stretching {fatci} far beyond things that are objectively "facts", because I
+had no term for such things.  (I wanted to use {bridi}, but it turns out the
+x1 is explicitly text.)
+
+Similarly, I'm using {fasnu} for {nu} abstractions, {selsku} for text (where
+text is {se du'u} abstractions, as well as complete sentences inside
+{lu...li'u} quotes), {mulna'u} for integers, and {namcu} for general numbers
+(although currently the number algorithm only produces integers; that might
+be changed later).
+
+In creating fatci.txt, I've had to balance a few issues.  I'd like it to be
+accurate, so that hopefully it can be used in other programs.  But I also
+want it to be simple.  Also, its real goal is to produce interesting, and
+often humorous results, so it shouldn't be too accurate.  Recall, for
+instance, 
+
+ F2: .i ro danlu cu ka'e limna
+
+This isn't, strictly speaking, true.  But it's far, far simpler than the
+alternative of marking which animals can and cannot swim, and if we get silly
+results from animals that can't (for instance, ants), then they are just
+that, silly, not meaningless.  So I've created a marking system.  The
+attitudinals {je'u nai} and {zo'o} are allowed anywhere in fatci.txt, and
+ignored by mlismu.  I've tried (inconsistently) to put {zo'o} on any line
+that's intended for humorous effect, and {je'u nai} on anything that's there
+just to simplify the situation.  So
+
+ F19: .i zo'o ro danlu cu ka'e se rebla
+ F20: .i zo'o ro pinji cu ka'e te cadzu
+ F21: je'u nai ro cipni cu ka'e vofli
+
+In theory, any program that wants to be accurate should strip those lines.
+In practice, there are many such lines that aren't properly marked.  Sorry.

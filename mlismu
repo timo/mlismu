@@ -1,0 +1,430 @@
+#!/usr/bin/perl -l
+
+
+use strict;
+use warnings;
+#use Smart::Comments;
+
+use List::Util 'shuffle';
+
+my %db;               #{cusku => [[prenu], [selsku], [prenu]]}
+my %parent_db;        #{nanmu => [nakni, remna], nanla => [nanmu]}
+my $zohe_prob = 0.2;  #chance of leaving a place unfilled
+my $subsentence_prob = 0.8; #chance of filling a NU with a {lo nu ...} instead
+                            #of another place
+my $explicit_zohe_prob = 0.1;
+my $lu_prob = 0.5;
+my $li_prob = 0.5;
+my $explicit_fa_prob = 0.1;
+my $selbri_prob = 0.5; #the higher this number, the further forward the selbri
+                       #occurs
+my $se_prob = 0.2;
+my $fa_prob = 0.2;
+
+my $prosumti_prob = 0.4;
+my $generic_prosumti_prob = 0.2;
+
+my $ui_prob = 0.1;
+
+my $use_jbofihe = 1; #set to 0 if jbofihe is unsupported
+
+my $debug = 0;
+
+my @gadri = qw(lo le);
+my @se = ('', qw(se te ve xe));
+my %se;
+@se{@se} = (1 .. 5);
+my @fa = qw(fa fe fi fo fu);
+my %PA = (
+    '.' => 'pi',
+    0 => 'no',
+    1 => 'pa',
+    2 => 're',
+    3 => 'ci',
+    4 => 'vo',
+    5 => 'mu',
+    6 => 'xa',
+    7 => 'ze',
+    8 => 'bi',
+    9 => 'so',
+);
+
+my %prosumti = (prenu => [qw( mi mi'a mi'o ma'a do do'o ko )],
+                dacti => [qw( ti ta tu )],
+                selsku =>[qw( dei do'i di'u de'u da'u di'e de'e da'e)]);
+my @generic_prosumti = (qw( ri ra ru 
+                            da de di
+                            ma
+                            zi'o zu'i
+                            ko'a ko'e ko'i ko'o ko'u 
+                            fo'a fo'e fo'i fo'o fo'u),
+                        map {"$_ boi"} (
+                            qw ( by. cy. dy. fy. gy. jy. ky. ly. my. ny. py. 
+                                 ry.  sy. ty. vy. xy. zy. ), 
+                            '.a bu', '.e bu', '.o bu', '.u bu', ".y'y", 
+                            '.y bu'));
+
+my @nu = qw(nu zu'o za'i mu'e);
+
+my @ui = qw( .a'a .a'e .a'i .a'o .a'u .ai .au ba'a ba'u be'u bi'u bu'o ca'e
+    da'i dai do'a .e'a .e'e .e'i .e'o .e'u .ei fu'i ga'i ge'e .i'a .i'e .i'i
+    .i'o .i'u .ia .ie .ii .io .iu ja'o je'u ji'a jo'a ju'a ju'o ka'u kau ke'u
+    ki'a ku'i la'a le'o li'a li'o mi'u mu'a na'i .o'a .o'e .o'i .o'o .o'u .oi
+    pa'e pau pe'a pe'i po'o ra'u re'e ri'e ro'a ro'e ro'i ro'o ro'u ru'a sa'a
+    sa'e sa'u se'a se'i se'o si'a su'a ta'o ta'u ti'e to'u .u'a .u'e .u'i .u'o
+    .u'u .ua .ue .ui .uo .uu va'i vu'e xu za'a zo'o zu'u );
+
+my %cache;             #{cusku => [prenu, remna, nanla, ...]
+my %parent_cache;      #{nanmu => [nakni, remna, mabru, danlu, dacti]}
+my %extant_places;     #{"tuple" => undef, "se tuple" => undef}
+
+open (my $db, '<', "$ENV{HOME}/lojban/fatci.txt") or die "Can't open fatci.txt: $!";
+while(<$db>){  ### Reading fatci...                    done
+    chomp;
+    s/#.*//;
+    s/\b(?:je'u\s*nai|zo'o)\b//g;
+    next unless /\S/;
+    s/^\.i?\s*//;
+    my ($sumti, $se, $brivla, $se2, $brivla2);
+    if (($se, $brivla, $se2, $brivla2) =
+            m{^\s*ro\s*da\s*(?:zo'u\s*da\s*)?   #intro
+              (?:cu\s+)?
+              (?:ka'e\s+)?
+              ([stvx]e\b)?\s*                   #se1
+              (.*?)\s+                          #selbri1
+              gi'o\s+                           
+              (?:ka'e\s+)?
+              ([stvx]e\b)?\s*                   #se2
+              (.*)                              #selbri2
+            }x)
+    {
+        no warnings 'uninitialized';
+           $sumti  = $se  ? "$se $brivla"   : $brivla;
+        my $sumti2 = $se2 ? "$se2 $brivla2" : $brivla2;
+        @extant_places{$sumti, $sumti2} = ();
+        push @{$db{$brivla}[$se{$se}-1]}, $sumti2;
+        push @{$db{$brivla2}[$se{$se2}-1]}, $sumti;
+        push @{$parent_db{$sumti}}, $sumti2;
+        push @{$parent_db{$sumti2}}, $sumti;
+        next;
+    }
+    if (($sumti, $se, $brivla) =
+            m{^(.*?)                             #sumti
+              \s+(?:cu\s*ka'e\s*|cu\s*|ka'e\s*)  #cu or ka'e or both
+              ([stvx]e)?\s+                      #se
+              (\S*)\s*                           #brivla
+              $}x)
+    { 
+        unless ($sumti =~ /^la\b/ || $sumti =~ s/^ro\s*//){
+            warn ".i mi na jimpe tu'a $sumti";
+            next;
+        }
+
+        no warnings 'uninitialized';
+        @extant_places{$sumti, $se ? "$se $brivla" : $brivla} = ();
+        push @{$db{$brivla}[$se{$se}-1]}, $sumti;
+        push @{$parent_db{$sumti}}, $se ? "$se $brivla" : $brivla;
+        next;
+    }
+
+    warn "mi na jimpe lo du'u $_";
+}
+close $db;
+
+use Data::Dumper;
+print Dumper(\%db) if $debug;
+print Dumper(\%parent_db) if $debug;
+
+my $arg = $ARGV[0] || 40;
+if ($arg =~ /^\D+$/){
+    my $selbri = $arg;
+    print assemble_bridi($selbri, fill_places($selbri));
+} else {
+    for (1..$arg){
+        print text_bridi();
+    }
+}
+print Dumper(\%cache) if $debug;
+
+sub text_bridi {
+    my $recursion = shift;
+    $recursion++;
+    my $selbri = rnd(keys %db);
+    my @places = fill_places($selbri, $recursion);
+    return assemble_bridi($selbri, @places);
+}
+
+#returns a selbri, then a list of sumti that fill it
+sub fill_places {
+    my $selbri = shift;
+    my $recursion = shift;
+    $recursion++;
+    return unless $selbri;
+    return unless exists $db{$selbri} || exists $extant_places{$selbri};
+    #my @places = @{$db{$selbri}};
+    #my @filled_places = map {gen_sumti($recursion, rnd(@{$_}))} @places;
+    my @filled_places = map {exists $extant_places{$_} 
+                                 ? gen_sumti($recursion, $_) 
+                                 : undef}
+                            $selbri, "se $selbri", "te $selbri", "ve $selbri",
+                            "xe $selbri"; 
+
+    pop @filled_places while (@filled_places && ! defined $filled_places[-1]);
+
+    return @filled_places;
+}
+
+#takes the output of gen_bridi and turns it into text
+sub assemble_bridi {
+    my ($selbri, @places) = @_;
+
+    return $selbri unless @places;
+
+    my $bridi = '';
+    
+    my $switch = int (rand(@places));
+    if (rand() < $se_prob && $switch > 1){
+        $switch--;
+        @places[0,$switch] = @places[$switch,0];
+        $selbri = $se[$switch] . ' ' . $selbri;
+    }
+    my $i = 1;
+    for (@places){
+        $_ = [$i++,$_];
+    }
+
+    while (rand() < $fa_prob){
+        $i = rand(@places);
+        my $j = rand(@places);
+        @places[$i,$j] = @places[$j,$i];
+    }
+
+    $i = 1;             #next place, if nothing fancy happens
+    my $selbri_yet = 0; #have we put the selbri in?
+
+    for (@places){
+        my ($place, $value) = @$_;
+        if (!$selbri_yet && rand() < $selbri_prob){
+            $selbri_yet = 1;
+            $bridi .= " cu" if $bridi;
+            $bridi .= " $selbri";
+            $i = 2 if ($i == 1);
+        }
+
+        if ($value || rand() < $explicit_zohe_prob){
+            $value = "zo'e" unless $value;
+            if ($place == $i){
+                $i ++;
+            } else {
+                $bridi .= ' '.$fa[$place-1];
+                $i = $place + 1;
+            }
+            $bridi .= " $value";
+        }
+    }
+    unless ($selbri_yet){
+        $bridi .= " cu" if $bridi;
+        $bridi .= " $selbri";
+    }
+    $bridi =~ s/^ //;
+
+    if ($use_jbofihe){
+        my $jbofihe_out = `echo \Q$bridi\E | jbofihe -se`;
+        while ($jbofihe_out =~ 
+                s/^You could omit the word '(.*?)' \(at line 1 col (\d+)\)\n//m){
+            my ($word, $pos) = ($1, $2-1); 
+            $bridi =~ s/^(.{$pos})\Q$word/$1 . (' ' x length $word)/e;
+        }
+        while ($jbofihe_out =~ 
+                s/^You could omit (?:all|both) the words '(.*?)'\n \(from line 1 col (\d+) to line 1 col \d+\)\n//ms){
+
+            my $len = length($1);
+            my $pos = $2-1;
+            substr($bridi, $pos, $len, ' ' x $len);
+        }
+        while ($jbofihe_out =~
+            s/^The words '(.*?)'\n \(from line 1 col (\d+) to line 1 col \d+\)\ncould be safely reduced to any of these minimal patterns:\n(.*?)\n\n//ms){
+
+            my $len = length($1);
+            my $offset = $2-1;
+            my @choices = split('\n', $3);
+            my $choice = rnd(@choices);
+            $choice =~ s/^.*:\s*//;
+            substr($bridi, $offset, $len, 
+                    $choice . (' ' x ($len - length($choice))));
+        }
+
+        $bridi =~ s/\s+/ /g;
+        $jbofihe_out =~ s/\s*\(0.*//s;
+        if ($jbofihe_out){
+            print "jbofihe has left: '$jbofihe_out'";
+            $debug=1;
+        }
+    }
+
+    my @valsi = split / /, $bridi;
+    
+    #The C-style loop below is because the number of elts in @valsi will change
+    for (my $i = 0; $i < @valsi; $i++){
+        while (rand() < $ui_prob){
+            splice @valsi, $i, 0, rnd(@ui);
+        }
+    }
+    
+    return join ' ', @valsi;
+}
+
+sub gen_sumti {
+    my $recursion = shift;
+    $recursion++;
+    my $type = shift;
+    return undef unless $type;
+    #cluck $recursion, ' ', (1 - 5/exp($recursion-3));
+    return undef if rand() < (1 - 5/exp($recursion-3));
+    #return undef if rand() < $zohe_prob**-($recursion+1);
+
+    my @fillers = ($type, gather_fillers($type, {})); 
+    return undef unless @fillers;
+
+    my %fillers;
+    @fillers{@fillers} = ();
+
+    delete $fillers{'da'};
+    delete $fillers{$type};
+    return undef unless %fillers;
+
+    if (rand() < $prosumti_prob){
+        for (shuffle keys %prosumti){
+            if (exists $fillers{$_}){
+                return rnd(@{$prosumti{$_}});
+            }
+        }
+    }
+    if (rand() < $generic_prosumti_prob){
+        return rnd(@generic_prosumti);
+    }
+
+    if (exists $fillers{'fasnu'} && rand() < $subsentence_prob){
+        return rnd(@gadri). ' ' . rnd(@nu) . ' ' .text_bridi($recursion).' kei ku';
+    }
+
+    if (exists $fillers{'fatci'} && rand() < $subsentence_prob){
+        return rnd(@gadri). " du'u ".text_bridi($recursion).' kei ku';
+    }
+
+    if (exists $fillers{'selsku'}){
+        if (rand() < $lu_prob){
+            return 'lu ' . text_bridi($recursion) . " li'u"
+        }
+        if (rand() < $subsentence_prob){
+            return rnd(@gadri) . " se du'u " . text_bridi($recursion) . ' kei ku';
+        }
+    }
+
+    if (exists $fillers{'namcu'} && rand() < $li_prob) {
+        return "li ".num2text(int 1/rand);
+    }
+
+    if (exists $fillers{"mulna'u"} && rand() < $li_prob){
+        return "li ".num2text(int 1/rand);
+    }
+
+    my $filler = rnd(keys %fillers);
+    return $filler if $filler =~ /^la\b/;
+    my ($selbri, $place);
+    if ($filler =~ /^([stvx]e\b)\s+(.*)/){
+        $selbri = $2;
+        $place = $se{$1} - 1;
+    } else {
+        $selbri = $filler;
+        $place = 0;
+    }
+
+    my @places = fill_places($selbri, $recursion);
+    @places[0,$place] = @places[$place,0];
+    
+    my $sumti = rnd(@gadri) . " $se[$place] $selbri";
+    $sumti =~ s/  / /;
+    shift @places;
+    if (@places){
+        my $next_unmarked = 2; #what would an unmarked be read as?
+        my $next_present = 1;  #what are we looking at?
+        my $places_added = 0;  #true if we've added a {be}
+        for (@places){
+            $next_present++;
+            next unless $_;
+
+            if ($next_unmarked != $next_present){
+                $_ = "$fa[$next_present - 1] $_";
+            }
+            if ($places_added){ 
+                $sumti .= " bei $_";
+            } else {
+                $sumti .= " be $_";
+                $places_added = 1;
+            }
+            $next_unmarked = $next_present+1;
+        }
+        $sumti .= " be'o" if $places_added;
+    }
+    return $sumti;
+}
+
+sub gather_fillers {
+    my $type = shift;
+    my $seen = shift;
+
+    return if exists $seen->{$type};
+    $seen->{$type} = 1;
+    return @{$cache{$type}} if exists $cache{$type};
+
+    if ($type eq 'da'){
+        my @list = map {gather_fillers($_, $seen)} keys %db;
+        $cache{'da'}=[@list];
+        return @list;
+    }
+
+    my ($se, $selbri) = $type =~ /^(?:([tsvx]e)\s+)?(.*)/;
+    $se = defined($se) ? $se{$se} - 1 : 0;
+
+    my @list;
+    my $list_ref;
+    return gather_up($type, {}) unless exists $db{$selbri};
+    return gather_up($type, {}) unless $list_ref = $db{$selbri}[$se];
+
+
+    @list = @$list_ref;
+    my %list;
+    @list{@list} = ();
+    for (@list){
+        @list{gather_fillers($_, $seen)} = ();
+    }
+    @list{gather_up($type, {})}=();
+    $cache{$type} = [keys %list];
+    return keys %list;
+}
+
+sub gather_up {
+    my $type = shift;
+    my $seen = shift;
+
+    return if exists $seen->{$type};
+    $seen->{$type} = 1;
+    return @{$parent_cache{$type}} if exists $parent_cache{$type};
+    return unless exists $parent_db{$type};
+    my %list;
+    @list{@{$parent_db{$type}}} = ();
+    for (@{$parent_db{$type}}){
+        @list{gather_up($_, $seen)} = ();
+    }
+    $parent_cache{$type} = [keys %list];
+    return keys %list;
+}
+
+sub num2text {
+    return join(' ', map {$PA{$_}} split(//, $_[0]));
+}
+
+sub rnd {
+    return $_[rand @_];
+}
